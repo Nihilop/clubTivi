@@ -10,6 +10,13 @@ import '../../data/services/logo_resolver_service.dart';
 import '../../core/feature_gate.dart';
 import 'package:dio/dio.dart';
 
+/// Source par défaut : chaînes gratuites iptv-org, regroupées par langue.
+const kIptvOrgProviderId = 'iptv-org';
+const kIptvOrgPlaylistUrl = 'https://iptv-org.github.io/iptv/index.language.m3u';
+const _kIptvOrgSeeded = 'tivi.iptvOrgSeeded';
+const _kIptvOrgParserVersion = 'tivi.iptvOrgParserVersion';
+const _iptvOrgParserVersion = 2;
+
 /// Manages IPTV providers: adding, refreshing, channel loading.
 class ProviderManager {
   final db.AppDatabase _db;
@@ -77,7 +84,7 @@ class ProviderManager {
 
     // Save channels to database
     await _db.upsertChannels(channels.map((c) => db.ChannelsCompanion.insert(
-      id: c.id,
+      id: _storedChannelId(provider, c),
       providerId: c.providerId,
       name: c.name,
       tvgId: Value(c.tvgId),
@@ -92,7 +99,46 @@ class ProviderManager {
     // Resolve missing logos in background
     _resolveChannelLogos(channels).catchError((_) {});
 
+    await (_db.update(_db.providers)..where((p) => p.id.equals(providerId)))
+        .write(db.ProvidersCompanion(lastRefresh: Value(DateTime.now())));
+
     return channels.length;
+  }
+
+  /// La playlist iptv-org par langue liste une même chaîne dans plusieurs
+  /// langues avec le même tvg-id : on inclut la langue dans l'identifiant
+  /// pour qu'elle reste visible dans chacune.
+  String _storedChannelId(db.Provider provider, Channel c) {
+    if (provider.id != kIptvOrgProviderId) return c.id;
+    final lang = (c.groupTitle ?? 'undefined').toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-');
+    return '${provider.id}_${lang}_${c.tvgId ?? c.streamUrl.hashCode}';
+  }
+
+  /// Source iptv-org ajoutée et activée au premier lancement (une seule fois :
+  /// si l'utilisateur la supprime, elle ne revient pas). Rafraîchie chaque jour.
+  Future<void> ensureDefaultProvider() async {
+    final prefs = await SharedPreferences.getInstance();
+    await purgeOrphanChannels();
+    final existing = (await _db.getAllProviders()).where((p) => p.id == kIptvOrgProviderId).firstOrNull;
+    if (existing == null) {
+      if (prefs.getBool(_kIptvOrgSeeded) ?? false) return;
+      await _db.upsertProvider(db.ProvidersCompanion.insert(
+        id: kIptvOrgProviderId,
+        name: 'iptv-org',
+        type: 'm3u',
+        url: const Value(kIptvOrgPlaylistUrl),
+      ));
+      await prefs.setBool(_kIptvOrgSeeded, true);
+      await refreshProvider(kIptvOrgProviderId);
+      return;
+    }
+    final last = existing.lastRefresh;
+    // Version du parseur : la relever force une réimportation (ex. ajout des en-têtes HTTP)
+    final outdated = (prefs.getInt(_kIptvOrgParserVersion) ?? 1) < _iptvOrgParserVersion;
+    if (existing.enabled && (outdated || last == null || DateTime.now().difference(last).inHours >= 24)) {
+      await refreshProvider(kIptvOrgProviderId);
+      await prefs.setInt(_kIptvOrgParserVersion, _iptvOrgParserVersion);
+    }
   }
 
   Future<List<Channel>> _refreshM3u(db.Provider provider) async {
@@ -121,6 +167,14 @@ class ProviderManager {
 
   Future<void> deleteProvider(String id) async {
     await _db.deleteProvider(id);
+    // Les chaînes ne sont pas supprimées en cascade : on les retire avec leur source
+    await (_db.delete(_db.channels)..where((c) => c.providerId.equals(id))).go();
+  }
+
+  /// Supprime les chaînes dont la source n'existe plus (suppressions antérieures).
+  Future<void> purgeOrphanChannels() async {
+    final ids = (await _db.getAllProviders()).map((p) => p.id).toList();
+    await (_db.delete(_db.channels)..where((c) => c.providerId.isNotIn(ids))).go();
   }
 
   /// Resolve missing logos in background after provider refresh.

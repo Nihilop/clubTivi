@@ -9,6 +9,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 
 import 'adaptive_buffer.dart';
 import 'stream_proxy.dart';
+import 'stream_url.dart';
 import '../../data/services/stream_alternatives_service.dart';
 import '../../data/services/stream_health_tracker.dart';
 
@@ -158,7 +159,7 @@ class PlayerService {
     _proxyActive = false;
     await _streamProxy.stop();
     await _ensureReady();
-    await player.open(Media(url));
+    await player.open(StreamUrl.parse(url).toMedia());
     await _bufferManager.applyForStream(url, this);
     await player.setVolume(100.0);
 
@@ -200,7 +201,7 @@ class PlayerService {
   /// Re-open the stream through the local ffmpeg proxy.
   Future<void> _retryWithProxy(String originalUrl) async {
     if (_proxyActive) return; // Avoid recursive retry
-    final proxyUrl = await _streamProxy.start(originalUrl);
+    final proxyUrl = await _streamProxy.start(StreamUrl.parse(originalUrl).url);
     if (proxyUrl == null) {
       debugPrint('[Player] ffmpeg proxy unavailable, keeping direct playback');
       return;
@@ -424,7 +425,7 @@ class PlayerService {
       }
     });
 
-    _warmPlayer!.open(Media(warmUrl));
+    _warmPlayer!.open(StreamUrl.parse(warmUrl).toMedia());
 
     // Timeout: if warm player doesn't become ready in 10s, dispose it
     _warmTimeoutTimer?.cancel();
@@ -466,7 +467,7 @@ class PlayerService {
       _currentUrl = newUrl;
       _proxyActive = false;
       await _streamProxy.stop();
-      await player.open(Media(newUrl));
+      await player.open(StreamUrl.parse(newUrl).toMedia());
       await _bufferManager.applyForStream(newUrl, this);
       _startFailoverMonitor();
 
@@ -490,7 +491,7 @@ class PlayerService {
     _currentUrl = newUrl;
     _proxyActive = false;
     await _streamProxy.stop();
-    await player.open(Media(newUrl));
+    await player.open(StreamUrl.parse(newUrl).toMedia());
     await _bufferManager.applyForStream(newUrl, this);
     _startFailoverMonitor();
 

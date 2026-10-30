@@ -1,3 +1,4 @@
+import '../../../features/player/stream_url.dart';
 import '../../models/channel.dart';
 
 /// Parses M3U and M3U Plus playlist formats.
@@ -19,6 +20,8 @@ class M3uParser {
     }
 
     String? currentExtInf;
+    // En-têtes HTTP déclarés entre #EXTINF et l'URL (#EXTVLCOPT:http-referrer=…)
+    final vlcOpts = <String, String>{};
 
     for (var i = 0; i < lines.length; i++) {
       final line = lines[i].trim();
@@ -30,6 +33,14 @@ class M3uParser {
 
       if (line.startsWith('#EXTINF:')) {
         currentExtInf = line;
+        vlcOpts.clear();
+        continue;
+      }
+
+      if (line.startsWith('#EXTVLCOPT:')) {
+        final opt = line.substring('#EXTVLCOPT:'.length);
+        final eq = opt.indexOf('=');
+        if (eq > 0) vlcOpts[opt.substring(0, eq).trim().toLowerCase()] = opt.substring(eq + 1).trim();
         continue;
       }
 
@@ -39,7 +50,7 @@ class M3uParser {
       // This should be a URL
       if (currentExtInf != null) {
         try {
-          final channel = _parseEntry(currentExtInf, line, providerId);
+          final channel = _parseEntry(currentExtInf, line, providerId, vlcOpts);
           if (channel != null) channels.add(channel);
         } catch (e) {
           errors.add('Line $i: $e');
@@ -51,11 +62,19 @@ class M3uParser {
     return M3uResult(channels: channels, errors: errors);
   }
 
-  Channel? _parseEntry(String extInf, String url, String providerId) {
-    if (url.isEmpty) return null;
+  Channel? _parseEntry(String extInf, String rawUrl, String providerId, [Map<String, String> vlcOpts = const {}]) {
+    if (rawUrl.isEmpty) return null;
 
     // Parse #EXTINF:-1 tvg-id="..." tvg-name="..." ... , Channel Name
     final attrs = _parseAttributes(extInf);
+
+    // Referer / User-Agent exigés par certains serveurs → ajoutés à l'URL (format Kodi)
+    final referer = attrs['http-referrer'] ?? vlcOpts['http-referrer'];
+    final userAgent = attrs['http-user-agent'] ?? vlcOpts['http-user-agent'];
+    final url = StreamUrl.encode(rawUrl, {
+      if (referer != null && referer.isNotEmpty) 'Referer': referer,
+      if (userAgent != null && userAgent.isNotEmpty) 'User-Agent': userAgent,
+    });
     final displayName = _parseDisplayName(extInf);
 
     if (displayName.isEmpty && attrs['tvg-name'] == null) return null;
@@ -110,18 +129,21 @@ class M3uParser {
     return extInf.substring(commaIndex + 1).trim();
   }
 
+  static final _videoFile = RegExp(r'\.(mp4|mkv|avi|mov|m4v|webm|wmv|flv|mpe?g)$');
+
   StreamType _inferStreamType(Map<String, String> attrs, String url) {
+    final path = (Uri.tryParse(StreamUrl.parse(url).url)?.path ?? '').toLowerCase();
+    // Xtream Codes URL patterns
+    if (path.contains('/movie/')) return StreamType.vod;
+    if (path.contains('/series/')) return StreamType.series;
+    // Un flux HLS ou sans fichier vidéo est du direct, même rangé dans « Movies » :
+    // ce sont des chaînes de films (iptv-org, Pluto…), pas des films à la demande.
+    if (!_videoFile.hasMatch(path)) return StreamType.live;
     final groupTitle = (attrs['group-title'] ?? '').toLowerCase();
-    if (groupTitle.contains('vod') || groupTitle.contains('movie')) {
-      return StreamType.vod;
-    }
-    if (groupTitle.contains('series')) {
+    if (groupTitle.contains('series') || groupTitle.contains('série') || groupTitle.contains('serie')) {
       return StreamType.series;
     }
-    // Xtream Codes URL patterns
-    if (url.contains('/movie/')) return StreamType.vod;
-    if (url.contains('/series/')) return StreamType.series;
-    return StreamType.live;
+    return StreamType.vod;
   }
 
   String? _emptyToNull(String? value) {

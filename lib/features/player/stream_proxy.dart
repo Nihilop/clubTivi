@@ -180,6 +180,19 @@ class StreamProxy {
       if (await File(path).exists()) return path;
     }
 
+    // Windows : `where` renvoie un vrai chemin (C:\…\ffmpeg.exe). `which` peut venir
+    // de Git Bash et renvoyer un chemin POSIX (/c/…) que Process.start ne sait pas lancer.
+    if (Platform.isWindows) {
+      try {
+        final result = await Process.run('where', ['ffmpeg']);
+        if (result.exitCode == 0) {
+          final first = (result.stdout as String).split(RegExp(r'\r?\n')).map((l) => l.trim()).firstWhere((l) => l.isNotEmpty, orElse: () => '');
+          if (first.isNotEmpty) return first;
+        }
+      } catch (_) {}
+      return null;
+    }
+
     // Try PATH lookup
     try {
       final result = await Process.run('which', ['ffmpeg']);

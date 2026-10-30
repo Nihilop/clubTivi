@@ -83,6 +83,11 @@ flutter:
     - assets/icon/
     - assets/fonts/
 
+  fonts:
+    - family: Rubik
+      fonts:
+        - asset: assets/fonts/Rubik-Variable.ttf
+
 flutter_launcher_icons:
   android: true
   ios: false

@@ -327,13 +327,6 @@ class FreeTvProvider {
       description: 'Free live TV and on-demand from Roku',
       icon: Icons.connected_tv_rounded,
     ),
-    FreeTvProvider(
-      id: 'iptv-org-us',
-      name: 'IPTV-Org (US)',
-      url: 'https://iptv-org.github.io/iptv/countries/us.m3u',
-      description: 'Community-maintained US channels aggregator',
-      icon: Icons.public_rounded,
-    ),
   ];
 }
 
